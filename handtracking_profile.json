@@ -1,8 +1,8 @@
 {
   "jsonid": "input_profile",
-  "controller_type": "handtracking",
+  "controller_type": "my_phonectrl_controller",
   "device_class": "TrackedDeviceClass_Controller",
-  "resource_root": "handtracking",
+  "resource_root": "my_phonectrl",
   "driver_name": "my_phonectrl",
   
   "input_bindingui_mode": "controller_handed",
