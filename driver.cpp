@@ -48,6 +48,9 @@ public:
     EVRInitError Activate(uint32_t unObjectId) override {
         _objectId = unObjectId;
 
+        PropertyContainerHandle_t container = VRProperties()->TrackedDeviceToPropertyContainer(_objectId);
+
+
         // Set controller properties
         VRProperties()->SetStringProperty(
             _objectId,
@@ -71,14 +74,14 @@ public:
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_InputProfilePath_String,
-            "{my_phonectrl}/resources/input/handtracking_profile.json"
+            "{my_phonectrl}/input/handtracking_profile.json"
         );
 
         // Set controller type
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_ControllerType_String,
-            "my_phonectrl_controller"  // Make sure this matches your input profile
+            "my_phonectrl"  // Make sure this matches your input profile
         );
        
         // Register as supporting hand tracking
@@ -89,16 +92,15 @@ public:
         );
         VRInputComponentHandle_t handle;
         VRDriverInput()->CreateSkeletonComponent(
-            _objectId,  // Container is the device property container
-            (_role == 0) ? "/input/skeleton/left" : "/input/skeleton/right",  // Match input profile
-            (_role == 0) ? "/skeleton/hand/left" : "/skeleton/hand/right",    // Base path
-            "/pose/raw",                                                      // Base pose path
-            VRSkeletalTracking_Full,                                          // Use full tracking
-            nullptr,                                                          // No grip limit transforms
-            0,                                                                // No grip transform count
-            &handle                                                           // Store handle
+            container,  // Use the property container from your device
+            (_role == 0) ? "/input/skeleton/left" : "/input/skeleton/right",
+            (_role == 0) ? "/skeleton/hand/left" : "/skeleton/hand/right",
+            "/pose/raw",
+            VRSkeletalTracking_Full,
+            nullptr,
+            0,
+            &_skeletalComponentHandle
         );
-        _skeletalComponentHandle = handle;
 
         // Set hand tracking priority
         VRProperties()->SetInt32Property(
@@ -508,35 +510,44 @@ private:
 
     // Create the skeletal component
     void CreateSkeletalComponents() {
-        if (_objectId != k_unTrackedDeviceIndexInvalid && _skeletalComponentHandle != vr::k_ulInvalidInputComponentHandle) {
-            // Get the VRDriverInput interface
-            IVRDriverInput* pDriverInput = VRDriverInput();
-            if (pDriverInput) {
-                // Update both motion ranges for compatibility
-                EVRInputError err1 = pDriverInput->UpdateSkeletonComponent(
+        if (_objectId != k_unTrackedDeviceIndexInvalid) {
+            PropertyContainerHandle_t container = VRProperties()->TrackedDeviceToPropertyContainer(_objectId);
+
+            // Create the skeletal component
+            EVRInputError err = VRDriverInput()->CreateSkeletonComponent(
+                container,
+                (_role == 0) ? "/input/skeleton/left" : "/input/skeleton/right",
+                (_role == 0) ? "/skeleton/hand/left" : "/skeleton/hand/right",
+                "/pose/raw",
+                VRSkeletalTracking_Full,
+                nullptr,
+                0,
+                &_skeletalComponentHandle
+            );
+
+            DebugLog("%s hand: Created skeletal component, error=%d, handle=%llu\n",
+                _role == 0 ? "Left" : "Right", err, _skeletalComponentHandle);
+
+            // Now update both motion ranges for compatibility
+            if (_skeletalComponentHandle != k_ulInvalidInputComponentHandle) {
+                err = VRDriverInput()->UpdateSkeletonComponent(
                     _skeletalComponentHandle,
-                    vr::VRSkeletalMotionRange_WithController,
+                    VRSkeletalMotionRange_WithController,
                     _boneTransforms.data(),
                     (uint32_t)_boneTransforms.size()
                 );
+                DebugLog("%s hand: Updated skeleton WithController, error=%d\n",
+                    _role == 0 ? "Left" : "Right", err);
 
-                EVRInputError err2 = pDriverInput->UpdateSkeletonComponent(
+                err = VRDriverInput()->UpdateSkeletonComponent(
                     _skeletalComponentHandle,
-                    vr::VRSkeletalMotionRange_WithoutController,
+                    VRSkeletalMotionRange_WithoutController,
                     _boneTransforms.data(),
                     (uint32_t)_boneTransforms.size()
                 );
-
-                DebugLog("%s hand: Updated skeleton with %d bones, error1=%d, error2=%d\n",
-                    _role == 0 ? "Left" : "Right",
-                    _boneTransforms.size(), err1, err2);
+                DebugLog("%s hand: Updated skeleton WithoutController, error=%d\n",
+                    _role == 0 ? "Left" : "Right", err);
             }
-            else {
-                DebugLog("%s hand: Failed to get VRDriverInput interface\n", _role == 0 ? "Left" : "Right");
-            }
-        }
-        else {
-            DebugLog("%s hand: Invalid object ID or skeleton handle\n", _role == 0 ? "Left" : "Right");
         }
     }
 
@@ -563,19 +574,24 @@ private:
             for (int i = 0; i < 21 && i < HAND_BONE_COUNT; i++) {
                 if (landmarks[i].size() < 3) continue;
 
-                // MediaPipe to SteamVR conversion:
-                // x stays the same, y and z are flipped and scaled
-                _boneTransforms[i].position.v[0] = landmarks[i][0] * scale;
-                _boneTransforms[i].position.v[1] = -landmarks[i][1] * scale;  // Flip Y
-                _boneTransforms[i].position.v[2] = -landmarks[i][2] * scale;  // Flip Z
-
                 // Set default orientation
                 _boneTransforms[i].orientation.w = 1.0f;
                 _boneTransforms[i].orientation.x = 0.0f;
                 _boneTransforms[i].orientation.y = 0.0f;
                 _boneTransforms[i].orientation.z = 0.0f;
-            }
 
+                // First pass: Set all positions correctly
+                for (int i = 0; i < 21 && i < HAND_BONE_COUNT; i++) {
+                    if (landmarks[i].size() < 3) continue;
+
+                    // Always be consistent with coordinate conversion
+                    _boneTransforms[i].position.v[0] = landmarks[i][0] * scale;
+                    _boneTransforms[i].position.v[1] = -landmarks[i][1] * scale;  // Flip Y
+                    _boneTransforms[i].position.v[2] = -landmarks[i][2] * scale;  // Flip Z
+                }
+            }
+            // Second pass: Calculate orientations
+            CalculateBoneOrientations();
         // Process each bone
         for (int i = 1; i < 21 && i < HAND_BONE_COUNT; i++) {
             // Set position
@@ -625,20 +641,16 @@ private:
                     }
                 }
             }
-            // Calculate bone orientations based on positions
-            CalculateBoneOrientations();
-            // Log bone positions after transformation
-            DebugLog("%s hand: Wrist at (%.3f, %.3f, %.3f)\n",
+            // Log a few key transformations
+            DebugLog("%s hand: Wrist at (%.3f, %.3f, %.3f) orientation (%.3f, %.3f, %.3f, %.3f)\n",
                 _role == 0 ? "Left" : "Right",
                 _boneTransforms[0].position.v[0],
                 _boneTransforms[0].position.v[1],
-                _boneTransforms[0].position.v[2]);
-
-            DebugLog("%s hand: Index tip at (%.3f, %.3f, %.3f)\n",
-                _role == 0 ? "Left" : "Right",
-                _boneTransforms[8].position.v[0],
-                _boneTransforms[8].position.v[1],
-                _boneTransforms[8].position.v[2]);
+                _boneTransforms[0].position.v[2],
+                _boneTransforms[0].orientation.w,
+                _boneTransforms[0].orientation.x,
+                _boneTransforms[0].orientation.y,
+                _boneTransforms[0].orientation.z);
         }
     }
 
@@ -774,7 +786,10 @@ public:
 
             try {
                 auto j = json::parse(buf);
-
+                // In the C++ driver:
+                DebugLog("Received valid hand data for %s hand with %d landmarks\n",
+                    j["left"].contains("landmarks") ? "left" : "right",
+                    j["left"].contains("landmarks") ? j["left"]["landmarks"].size() : 0);
                 // Process left hand
                 if (j.contains("left") && j["left"].contains("pos") &&
                     j["left"]["pos"].is_array() && g_left) {
