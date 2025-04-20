@@ -1,0 +1,52 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "my_phonectrl_controller",
+  "device_class": "TrackedDeviceClass_Controller",
+  "resource_root": "my_phonectrl",
+  "driver_name": "my_phonectrl",
+  
+  "input_bindingui_mode": "controller_handed",
+  "input_bindingui_left": {
+    "image": "{handtracking}/icons/left_hand.png"
+  },
+  "input_bindingui_right": {
+    "image": "{handtracking}/icons/right_hand.png"
+  },
+  
+  "input_source": {
+    "/input/skeleton/left": {
+      "type": "skeleton",
+      "skeleton": "/skeleton/hand/left",
+      "side": "left"
+    },
+    "/input/skeleton/right": {
+      "type": "skeleton",
+      "skeleton": "/skeleton/hand/right",
+      "side": "right"
+    },
+    "/input/grip/left": {
+      "type": "button",
+      "click": true,
+      "binding_image_point": [ 0, 0 ],
+      "order": 100
+    },
+    "/input/grip/right": {
+      "type": "button",
+      "click": true,
+      "binding_image_point": [ 0, 0 ],
+      "order": 100
+    },
+    "/input/trigger/left": {
+      "type": "button",
+      "click": true,
+      "binding_image_point": [ 0, 0 ],
+      "order": 10
+    },
+    "/input/trigger/right": {
+      "type": "button",
+      "click": true,
+      "binding_image_point": [ 0, 0 ],
+      "order": 10
+    }
+  }
+}
