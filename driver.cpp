@@ -71,7 +71,7 @@ public:
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_InputProfilePath_String,
-            "{my_phonectrl}/input/handtracking_profile.json"
+            "{my_phonectrl}/resources/input/handtracking_profile.json"
         );
 
         // Set controller type
