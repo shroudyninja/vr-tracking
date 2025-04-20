@@ -13,6 +13,9 @@ using json = nlohmann::json;
 
 // Define missing constants/enums that might not be in your OpenVR version
 // These definitions should be outside any class to be accessible globally
+#ifndef Prop_SupportsHandTracking_Bool
+#define Prop_SupportsHandTracking_Bool static_cast<vr::ETrackedDeviceProperty>(3000) // Use a high unused ID
+#endif
 #ifndef IVRControllerComponent_Version
 const char* const IVRControllerComponent_Version = "IVRControllerComponent_001";
 #endif
@@ -68,26 +71,28 @@ public:
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_InputProfilePath_String,
-            "{my_phonectrl}/input/handtracking_profile.json"  // Changed from {handtracking} to {my_phonectrl}
+            "{my_phonectrl}/input/handtracking_profile.json"
         );
+
         // Set controller type
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_ControllerType_String,
-            "my_phonectrl_controller"  // Add this line to explicitly set the controller type
+            "my_phonectrl_controller"  // Make sure this matches your input profile
         );
-        // Register controller as being hand tracked
+
+        // Register as supporting hand tracking
+        VRProperties()->SetBoolProperty(
+            _objectId,
+            Prop_SupportsHandTracking_Bool,
+            true
+        );
+
+        // Set hand tracking priority
         VRProperties()->SetInt32Property(
             _objectId,
             Prop_ControllerHandSelectionPriority_Int32,
             INT32_MAX
-        );
-
-        // Set which hand this is
-        VRProperties()->SetInt32Property(
-            _objectId,
-            Prop_Axis0Type_Int32,
-            k_eControllerAxis_TrackPad
         );
 
         // Create skeletal components
@@ -258,8 +263,21 @@ public:
 
     // Process hand landmark data for skeletal input
     void UpdateHandLandmarks(const std::vector<std::vector<float>>& landmarks) {
-        if (landmarks.empty()) return;
+        if (landmarks.empty()) {
+            DebugLog("%s hand: No landmarks received\n", _role == 0 ? "Left" : "Right");
+            return;
+        }
+        DebugLog("%s hand: Received %d landmarks\n", _role == 0 ? "Left" : "Right", landmarks.size());
+        // Log a few landmark positions
+        if (landmarks.size() >= 21) {
+            DebugLog("%s hand: Wrist at (%.3f, %.3f, %.3f)\n",
+                _role == 0 ? "Left" : "Right",
+                landmarks[0][0], landmarks[0][1], landmarks[0][2]);
 
+            DebugLog("%s hand: Index tip at (%.3f, %.3f, %.3f)\n",
+                _role == 0 ? "Left" : "Right",
+                landmarks[8][0], landmarks[8][1], landmarks[8][2]);
+        }
         // Store hand visibility
         _handVisible = true;
 
@@ -316,19 +334,36 @@ private:
 
     // Create the skeletal component
     void CreateSkeletalComponents() {
-        if (_objectId == k_unTrackedDeviceIndexInvalid) return;
+        if (_objectId != k_unTrackedDeviceIndexInvalid && _skeletalComponentHandle != vr::k_ulInvalidInputComponentHandle) {
+            // Get the VRDriverInput interface
+            IVRDriverInput* pDriverInput = VRDriverInput();
+            if (pDriverInput) {
+                // Update both motion ranges for compatibility
+                EVRInputError err1 = pDriverInput->UpdateSkeletonComponent(
+                    _skeletalComponentHandle,
+                    vr::VRSkeletalMotionRange_WithController,
+                    _boneTransforms.data(),
+                    (uint32_t)_boneTransforms.size()
+                );
 
-        PropertyContainerHandle_t container = VRProperties()->TrackedDeviceToPropertyContainer(_objectId);
-        VRDriverInput()->CreateSkeletonComponent(
-            container,
-            _role == 0 ? "/input/skeleton/left" : "/input/skeleton/right",
-            _role == 0 ? "/skeleton/hand/left" : "/skeleton/hand/right",
-            _role == 0 ? "/pose/raw/left" : "/pose/raw/right",
-            VRSkeletalTracking_Partial,
-            nullptr,  // Grip limit transforms
-            0,        // Grip limit transform count
-            &_skeletalComponentHandle
-        );
+                EVRInputError err2 = pDriverInput->UpdateSkeletonComponent(
+                    _skeletalComponentHandle,
+                    vr::VRSkeletalMotionRange_WithoutController,
+                    _boneTransforms.data(),
+                    (uint32_t)_boneTransforms.size()
+                );
+
+                DebugLog("%s hand: Updated skeleton with %d bones, error1=%d, error2=%d\n",
+                    _role == 0 ? "Left" : "Right",
+                    _boneTransforms.size(), err1, err2);
+            }
+            else {
+                DebugLog("%s hand: Failed to get VRDriverInput interface\n", _role == 0 ? "Left" : "Right");
+            }
+        }
+        else {
+            DebugLog("%s hand: Invalid object ID or skeleton handle\n", _role == 0 ? "Left" : "Right");
+        }
     }
 
     // Convert MediaPipe landmarks to SteamVR bone transforms
@@ -346,70 +381,115 @@ private:
         // Scale factor to convert from MediaPipe's normalized coordinates to meters
         float scale = 0.1f;
 
-        // Map wrist position (root)
-        VRBoneTransform_t& wrist = _boneTransforms[0];
-        wrist.position.v[0] = landmarks[0][0] * scale;
-        wrist.position.v[1] = landmarks[0][1] * scale;
-        wrist.position.v[2] = landmarks[0][2] * scale;
+        // Map wrist (root)
+        _boneTransforms[0].position.v[0] = landmarks[0][0] * scale;
+        _boneTransforms[0].position.v[1] = -landmarks[0][1] * scale;  // Flip Y axis
+        _boneTransforms[0].position.v[2] = -landmarks[0][2] * scale;  // Flip Z axis
 
-        // Simple mapping of landmarks to bone transforms
-        // This is a simplification - a real implementation would compute proper bone orientations
+        // Set root orientation - assuming z is forward, y is up
+        _boneTransforms[0].orientation.w = 1.0f;
+        _boneTransforms[0].orientation.x = 0.0f;
+        _boneTransforms[0].orientation.y = 0.0f;
+        _boneTransforms[0].orientation.z = 0.0f;
+
+        // Process each bone
         for (int i = 1; i < 21 && i < HAND_BONE_COUNT; i++) {
+            // Set position
             _boneTransforms[i].position.v[0] = landmarks[i][0] * scale;
             _boneTransforms[i].position.v[1] = landmarks[i][1] * scale;
             _boneTransforms[i].position.v[2] = landmarks[i][2] * scale;
 
-            // Calculate bone orientation - simplified approach
-            // For a proper implementation, you'd compute the orientation from parent to child bone
-            if (i > 0) {
-                // Simple way to align bones - not anatomically correct but shows the concept
-                int parent = GetParentBoneIndex(i);
-                if (parent >= 0) {
-                    // Simple direction vector between parent and current bone
-                    float dx = _boneTransforms[i].position.v[0] - _boneTransforms[parent].position.v[0];
-                    float dy = _boneTransforms[i].position.v[1] - _boneTransforms[parent].position.v[1];
-                    float dz = _boneTransforms[i].position.v[2] - _boneTransforms[parent].position.v[2];
+            // Calculate bone orientation from parent to child
+            int parent = GetParentBoneIndex(i);
+            if (parent >= 0) {
+                // Direction vector from parent to current bone
+                float dx = _boneTransforms[i].position.v[0] - _boneTransforms[parent].position.v[0];
+                float dy = _boneTransforms[i].position.v[1] - _boneTransforms[parent].position.v[1];
+                float dz = _boneTransforms[i].position.v[2] - _boneTransforms[parent].position.v[2];
 
-                    // Normalize
-                    float len = sqrt(dx * dx + dy * dy + dz * dz);
-                    if (len > 0.0001f) {
-                        dx /= len;
-                        dy /= len;
-                        dz /= len;
+                // Normalize
+                float len = sqrt(dx * dx + dy * dy + dz * dz);
+                if (len > 0.0001f) {
+                    dx /= len; dy /= len; dz /= len;
+
+                    // Calculate rotation as quaternion from direction vector
+                    // This creates a quaternion that rotates the default bone direction to the target direction
+
+                    // Assuming default bone direction is (0,0,1) in SteamVR coordinates
+                    // Which is actually (0,0,-1) after our coordinate flip
+                    float angle = acos(-dz);  // Adjusted for flipped Z
+
+                    if (angle > 0.0001f) {
+                        float sinHalfAngle = sin(angle * 0.5f);
+                        float cosHalfAngle = cos(angle * 0.5f);
+                        // Cross product of (0,0,1) with direction gives rotation axis
+                        float rx = -dy;  // Adjusted for flipped Z
+                        float ry = dx;   // Adjusted for flipped Z
+                        float rz = 0;
+
+                        // Normalize rotation axis
+                        float axisLen = sqrt(rx * rx + ry * ry);
+                        if (axisLen > 0.0001f) {
+                            rx /= axisLen;
+                            ry /= axisLen;
+
+                            _boneTransforms[i].orientation.w = cosHalfAngle;
+                            _boneTransforms[i].orientation.x = rx * sinHalfAngle;
+                            _boneTransforms[i].orientation.y = ry * sinHalfAngle;
+                            _boneTransforms[i].orientation.z = rz * sinHalfAngle;
+                        }
                     }
-
-                    // Very simplified quaternion from direction vector
-                    // This is just a placeholder - proper bone orientation is more complex
-                    _boneTransforms[i].orientation.w = 1.0f;
-                    _boneTransforms[i].orientation.x = 0.0f;
-                    _boneTransforms[i].orientation.y = 0.0f;
-                    _boneTransforms[i].orientation.z = 0.0f;
                 }
             }
+            // Log bone positions after transformation
+            DebugLog("%s hand: Wrist at (%.3f, %.3f, %.3f)\n",
+                _role == 0 ? "Left" : "Right",
+                _boneTransforms[0].position.v[0],
+                _boneTransforms[0].position.v[1],
+                _boneTransforms[0].position.v[2]);
+
+            DebugLog("%s hand: Index tip at (%.3f, %.3f, %.3f)\n",
+                _role == 0 ? "Left" : "Right",
+                _boneTransforms[8].position.v[0],
+                _boneTransforms[8].position.v[1],
+                _boneTransforms[8].position.v[2]);
         }
     }
 
-    // Get parent bone index for a given bone
     int GetParentBoneIndex(int boneIndex) {
-        // Very simplified parent mapping
-        // A real implementation would use SteamVR's bone hierarchy
-        if (boneIndex == 0) return -1;  // Wrist has no parent
+        // SteamVR hand bones are arranged in a specific hierarchy
+        // Modify this according to the actual SteamVR bone structure
+        // Return the index of the parent bone for the given bone index
 
-        // Thumb
-        if (boneIndex >= 1 && boneIndex <= 4) {
-            return boneIndex - 1;  // Parent is previous bone
-        }
+        if (boneIndex == 0) return -1;  // Wrist is the root
 
-        // Fingers
-        if (boneIndex >= 5) {
-            int finger = (boneIndex - 5) / 4;
-            int bone = (boneIndex - 5) % 4;
+        // For the standard 31-bone hand model in SteamVR:
+        if (boneIndex == 1) return 0;   // Thumb metacarpal -> wrist
+        if (boneIndex == 2) return 1;   // Thumb proximal -> thumb metacarpal
+        if (boneIndex == 3) return 2;   // Thumb distal -> thumb proximal
+        if (boneIndex == 4) return 3;   // Thumb tip -> thumb distal
 
-            if (bone == 0) return 0;  // MCP connects to wrist
-            return boneIndex - 1;     // Otherwise, parent is previous bone
-        }
+        if (boneIndex == 5) return 0;   // Index metacarpal -> wrist
+        if (boneIndex == 6) return 5;   // Index proximal -> index metacarpal
+        if (boneIndex == 7) return 6;   // Index middle -> index proximal
+        if (boneIndex == 8) return 7;   // Index distal -> index middle
 
-        return -1;
+        if (boneIndex == 9) return 0;   // Middle metacarpal -> wrist
+        if (boneIndex == 10) return 9;  // Middle proximal -> middle metacarpal
+        if (boneIndex == 11) return 10; // Middle middle -> middle proximal
+        if (boneIndex == 12) return 11; // Middle distal -> middle middle
+
+        if (boneIndex == 13) return 0;  // Ring metacarpal -> wrist
+        if (boneIndex == 14) return 13; // Ring proximal -> ring metacarpal
+        if (boneIndex == 15) return 14; // Ring middle -> ring proximal
+        if (boneIndex == 16) return 15; // Ring distal -> ring middle
+
+        if (boneIndex == 17) return 0;  // Pinky metacarpal -> wrist
+        if (boneIndex == 18) return 17; // Pinky proximal -> pinky metacarpal
+        if (boneIndex == 19) return 18; // Pinky middle -> pinky proximal
+        if (boneIndex == 20) return 19; // Pinky distal -> pinky middle
+
+        return -1;  // Unknown bone
     }
 };
 
@@ -494,67 +574,83 @@ public:
             DebugLog("Driver running frame %d\n", frameCount);
         }
         // Non-blocking recv
-        char buf[4096];  // Increased buffer size for hand data
+        char buf[8192];  // Larger buffer size for hand data
         sockaddr_in from;
         int fromlen = sizeof(from);
         int len = recvfrom(g_sock, buf, sizeof(buf) - 1, 0, (sockaddr*)&from, &fromlen);
 
         if (len > 0) {
             buf[len] = 0;
+
+            // Don't log the entire buffer, it's too large
             DebugLog("Received UDP data: %d bytes\n", len);
 
             try {
                 auto j = json::parse(buf);
 
                 // Process left hand
-                if (j["left"]["pos"].is_array() && g_left) {
-                    DebugLog("Left hand position: %.3f, %.3f, %.3f\n",
-                        j["left"]["pos"][0].get<float>(),
-                        j["left"]["pos"][1].get<float>(),
-                        j["left"]["pos"][2].get<float>());
+                if (j.contains("left") && j["left"].contains("pos") &&
+                    j["left"]["pos"].is_array() && g_left) {
 
-                    g_left->SetRawPose(
-                        j["left"]["pos"].get<std::vector<float>>(),
-                        j["left"]["rot"].get<std::vector<float>>()
-                    );
+                    std::vector<float> leftPos = j["left"]["pos"].get<std::vector<float>>();
+                    std::vector<float> leftRot = j["left"]["rot"].get<std::vector<float>>();
 
-                    // Process hand landmarks if available
-                    if (j["left"]["landmarks"].is_array()) {
-                        DebugLog("Left hand landmarks count: %d\n", j["left"]["landmarks"].size());
-                        g_left->UpdateHandLandmarks(j["left"]["landmarks"].get<std::vector<std::vector<float>>>());
-                    }
-                    else {
-                        DebugLog("NO LEFT HAND LANDMARKS IN DATA\n");
+                    if (leftPos.size() == 3 && leftRot.size() == 4) {
+                        DebugLog("Left hand position: %.3f, %.3f, %.3f\n",
+                            leftPos[0], leftPos[1], leftPos[2]);
+
+                        g_left->SetRawPose(leftPos, leftRot);
+
+                        // Process hand landmarks if available
+                        if (j["left"].contains("landmarks") && j["left"]["landmarks"].is_array()) {
+                            auto landmarks = j["left"]["landmarks"].get<std::vector<std::vector<float>>>();
+                            DebugLog("Left hand landmarks count: %d\n", landmarks.size());
+                            g_left->UpdateHandLandmarks(landmarks);
+                        }
+                        else {
+                            DebugLog("No left hand landmarks in data\n");
+                        }
                     }
                 }
 
                 // Process right hand
-                    if (j["right"]["pos"].is_array() && g_right) {
-                        DebugLog("Right hand position: %.3f, %.3f, %.3f\n",
-                            j["right"]["pos"][0].get<float>(),
-                            j["right"]["pos"][1].get<float>(),
-                            j["right"]["pos"][2].get<float>());
+                if (j.contains("right") && j["right"].contains("pos") &&
+                    j["right"]["pos"].is_array() && g_right) {
 
-                        g_right->SetRawPose(
-                            j["right"]["pos"].get<std::vector<float>>(),
-                            j["right"]["rot"].get<std::vector<float>>()
-                        );
+                    std::vector<float> rightPos = j["right"]["pos"].get<std::vector<float>>();
+                    std::vector<float> rightRot = j["right"]["rot"].get<std::vector<float>>();
+
+                    if (rightPos.size() == 3 && rightRot.size() == 4) {
+                        DebugLog("Right hand position: %.3f, %.3f, %.3f\n",
+                            rightPos[0], rightPos[1], rightPos[2]);
+
+                        g_right->SetRawPose(rightPos, rightRot);
 
                         // Process hand landmarks if available
-                        if (j["right"]["landmarks"].is_array()) {
-                            DebugLog("Right hand landmarks count: %d\n", j["right"]["landmarks"].size());
-                            g_right->UpdateHandLandmarks(j["right"]["landmarks"].get<std::vector<std::vector<float>>>());
+                        if (j["right"].contains("landmarks") && j["right"]["landmarks"].is_array()) {
+                            auto landmarks = j["right"]["landmarks"].get<std::vector<std::vector<float>>>();
+                            DebugLog("Right hand landmarks count: %d\n", landmarks.size());
+                            g_right->UpdateHandLandmarks(landmarks);
                         }
                         else {
-                            DebugLog("NO RIGHT HAND LANDMARKS IN DATA\n");
+                            DebugLog("No right hand landmarks in data\n");
                         }
                     }
+                }
+            }
+            catch (const json::exception& e) {
+                DebugLog("JSON parsing error: %s\n", e.what());
+                // Log the first 100 characters of the buffer for debugging
+                char logBuffer[101];
+                strncpy_s(logBuffer, buf, 100);
+                logBuffer[100] = '\0';
+                DebugLog("Buffer start: %s\n", logBuffer);
             }
             catch (const std::exception& e) {
-                DebugLog("JSON parsing error: %s\n", e.what());
+                DebugLog("Standard exception: %s\n", e.what());
             }
             catch (...) {
-                DebugLog("Unknown JSON parsing error\n");
+                DebugLog("Unknown error while processing UDP data\n");
             }
         }
 
