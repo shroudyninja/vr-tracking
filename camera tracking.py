@@ -177,6 +177,7 @@ while True:
             # Get the landmarks for each hand (use whichever camera sees it)
             left_landmarks = hand0_landmarks if hand0_type == "left" else hand1_landmarks
             right_landmarks = hand0_landmarks if hand0_type == "right" else hand1_landmarks
+
             # Build data structure for UDP transmission
             data = {
                 "timestamp": time.time(),
@@ -201,25 +202,7 @@ while True:
                     "cam1": bool(res1.multi_hand_landmarks)
                 }
             }
-            data = {
-                "timestamp": time.time(),
-                "head": {
-                    "pos": head_t.ravel().tolist() if head_t is not None else None,
-                    "rot": head_r.tolist() if head_t is not None else None
-                },
-                "left": {
-                    "pos": left_t.ravel().tolist() if left_t is not None else None,
-                    "rot": left_r.tolist() if left_t is not None else None
-                },
-                "right": {
-                    "pos": right_t.ravel().tolist() if right_t is not None else None,
-                    "rot": right_r.tolist() if right_t is not None else None
-                },
-                "hands_found": {
-                    "cam0": bool(res0.multi_hand_landmarks),
-                    "cam1": bool(res1.multi_hand_landmarks)
-                }
-            }
+
             msg = json.dumps(data).encode('utf-8')
             sock.sendto(msg, (UDP_IP, UDP_PORT))
 
