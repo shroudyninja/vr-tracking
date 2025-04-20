@@ -7,10 +7,10 @@
   
   "input_bindingui_mode": "controller_handed",
   "input_bindingui_left": {
-    "image": "{handtracking}/resources/input/left_hand.png"
+    "image": "{handtracking}/input/left_hand.png"
   },
   "input_bindingui_right": {
-    "image": "{handtracking}/resources/input/right_hand.png"
+    "image": "{handtracking}/input/right_hand.png"
   },
   
   "input_source": {
