@@ -3,5 +3,7 @@
   "directory": "",
   "resourceOnly": false,
   "hmd_presence": [],
-  "loadPriority": 0
+  "loadPriority": 0,
+  "extends": ["vr_controller"],  // Add this line to extend controller functionality
+  "device_class": "controller"    // Add this line to identify as a controller
 }
