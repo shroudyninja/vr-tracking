@@ -44,7 +44,7 @@ public:
         // Initialize the skeletal reference transforms
         InitSkeletalSystem();
     }
-
+    VRInputComponentHandle_t _poseComponentHandle = k_ulInvalidInputComponentHandle;
     EVRInitError Activate(uint32_t unObjectId) override {
         _objectId = unObjectId;
 
@@ -118,6 +118,10 @@ public:
 
         return VRInitError_None;
     }
+    // Replace this near the beginning of your file (around line 16):
+#ifndef VRScalarUnits_None
+#define VRScalarUnits_None static_cast<vr::EVRScalarUnits>(0)
+#endif
     // Add this as a private method in the PhoneController class
     void CalculateBoneOrientations() {
         // Calculate orientations for each bone based on positions
@@ -525,6 +529,7 @@ private:
                 0,
                 &_skeletalComponentHandle
             );
+
             // Add these lines to register the raw pose input source
             VRDriverInput()->CreateScalarComponent(
                 container,
