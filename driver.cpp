@@ -64,13 +64,18 @@ public:
             _role == 0 ? TrackedControllerRole_LeftHand : TrackedControllerRole_RightHand
         );
 
-        // Set controller input profile
+        // Set controller input profile - Update the path prefix to match what SteamVR expects
         VRProperties()->SetStringProperty(
             _objectId,
             Prop_InputProfilePath_String,
-            "{handtracking}/input/handtracking_profile.json"
+            "{my_phonectrl}/input/handtracking_profile.json"  // Changed from {handtracking} to {my_phonectrl}
         );
-
+        // Set controller type
+        VRProperties()->SetStringProperty(
+            _objectId,
+            Prop_ControllerType_String,
+            "my_phonectrl_controller"  // Add this line to explicitly set the controller type
+        );
         // Register controller as being hand tracked
         VRProperties()->SetInt32Property(
             _objectId,
@@ -143,6 +148,13 @@ public:
             VRServerDriverHost()->TrackedDevicePoseUpdated(
                 _objectId, p, sizeof(p)
             );
+            // Log position and orientation when updated
+            DebugLog("%s hand pose: pos(%.3f, %.3f, %.3f) quat(%.3f, %.3f, %.3f, %.3f)\n",
+                _role == 0 ? "Left" : "Right",
+                p.vecPosition[0], p.vecPosition[1], p.vecPosition[2],
+                p.qRotation.w, p.qRotation.x, p.qRotation.y, p.qRotation.z);
+
+            VRServerDriverHost()->TrackedDevicePoseUpdated(_objectId, p, sizeof(p));
         }
     }
 
@@ -477,6 +489,10 @@ public:
     }
 
     void RunFrame() override {
+        static int frameCount = 0;
+        if (++frameCount % 100 == 0) {  // Log every 100 frames
+            DebugLog("Driver running frame %d\n", frameCount);
+        }
         // Non-blocking recv
         char buf[4096];  // Increased buffer size for hand data
         sockaddr_in from;
@@ -485,11 +501,18 @@ public:
 
         if (len > 0) {
             buf[len] = 0;
+            DebugLog("Received UDP data: %d bytes\n", len);
+
             try {
                 auto j = json::parse(buf);
 
                 // Process left hand
                 if (j["left"]["pos"].is_array() && g_left) {
+                    DebugLog("Left hand position: %.3f, %.3f, %.3f\n",
+                        j["left"]["pos"][0].get<float>(),
+                        j["left"]["pos"][1].get<float>(),
+                        j["left"]["pos"][2].get<float>());
+
                     g_left->SetRawPose(
                         j["left"]["pos"].get<std::vector<float>>(),
                         j["left"]["rot"].get<std::vector<float>>()
@@ -497,22 +520,35 @@ public:
 
                     // Process hand landmarks if available
                     if (j["left"]["landmarks"].is_array()) {
+                        DebugLog("Left hand landmarks count: %d\n", j["left"]["landmarks"].size());
                         g_left->UpdateHandLandmarks(j["left"]["landmarks"].get<std::vector<std::vector<float>>>());
+                    }
+                    else {
+                        DebugLog("NO LEFT HAND LANDMARKS IN DATA\n");
                     }
                 }
 
                 // Process right hand
-                if (j["right"]["pos"].is_array() && g_right) {
-                    g_right->SetRawPose(
-                        j["right"]["pos"].get<std::vector<float>>(),
-                        j["right"]["rot"].get<std::vector<float>>()
-                    );
+                    if (j["right"]["pos"].is_array() && g_right) {
+                        DebugLog("Right hand position: %.3f, %.3f, %.3f\n",
+                            j["right"]["pos"][0].get<float>(),
+                            j["right"]["pos"][1].get<float>(),
+                            j["right"]["pos"][2].get<float>());
 
-                    // Process hand landmarks if available
-                    if (j["right"]["landmarks"].is_array()) {
-                        g_right->UpdateHandLandmarks(j["right"]["landmarks"].get<std::vector<std::vector<float>>>());
+                        g_right->SetRawPose(
+                            j["right"]["pos"].get<std::vector<float>>(),
+                            j["right"]["rot"].get<std::vector<float>>()
+                        );
+
+                        // Process hand landmarks if available
+                        if (j["right"]["landmarks"].is_array()) {
+                            DebugLog("Right hand landmarks count: %d\n", j["right"]["landmarks"].size());
+                            g_right->UpdateHandLandmarks(j["right"]["landmarks"].get<std::vector<std::vector<float>>>());
+                        }
+                        else {
+                            DebugLog("NO RIGHT HAND LANDMARKS IN DATA\n");
+                        }
                     }
-                }
             }
             catch (const std::exception& e) {
                 DebugLog("JSON parsing error: %s\n", e.what());
