@@ -1,6 +1,6 @@
 {
   "name": "my_phonectrl",
-  "directory": "",
+  "directory": "my_phonectrl",
   "resourceOnly": false,
   "hmd_presence": [],
   "loadPriority": 0
