@@ -80,13 +80,25 @@ public:
             Prop_ControllerType_String,
             "my_phonectrl_controller"  // Make sure this matches your input profile
         );
-
+       
         // Register as supporting hand tracking
         VRProperties()->SetBoolProperty(
             _objectId,
             Prop_SupportsHandTracking_Bool,
             true
         );
+        VRInputComponentHandle_t handle;
+        VRDriverInput()->CreateSkeletonComponent(
+            _objectId,  // Container is the device property container
+            (_role == 0) ? "/input/skeleton/left" : "/input/skeleton/right",  // Match input profile
+            (_role == 0) ? "/skeleton/hand/left" : "/skeleton/hand/right",    // Base path
+            "/pose/raw",                                                      // Base pose path
+            VRSkeletalTracking_Full,                                          // Use full tracking
+            nullptr,                                                          // No grip limit transforms
+            0,                                                                // No grip transform count
+            &handle                                                           // Store handle
+        );
+        _skeletalComponentHandle = handle;
 
         // Set hand tracking priority
         VRProperties()->SetInt32Property(
@@ -381,16 +393,26 @@ private:
         // Scale factor to convert from MediaPipe's normalized coordinates to meters
         float scale = 0.1f;
 
-        // Map wrist (root)
-        _boneTransforms[0].position.v[0] = landmarks[0][0] * scale;
-        _boneTransforms[0].position.v[1] = -landmarks[0][1] * scale;  // Flip Y axis
-        _boneTransforms[0].position.v[2] = -landmarks[0][2] * scale;  // Flip Z axis
+        // SteamVR uses a different coordinate system than MediaPipe
+            // MediaPipe: +Y is down, +Z is forward (toward camera)
+            // SteamVR: +Y is up, +Z is backward
 
-        // Set root orientation - assuming z is forward, y is up
-        _boneTransforms[0].orientation.w = 1.0f;
-        _boneTransforms[0].orientation.x = 0.0f;
-        _boneTransforms[0].orientation.y = 0.0f;
-        _boneTransforms[0].orientation.z = 0.0f;
+            // For all bones, apply the same coordinate conversion
+            for (int i = 0; i < 21 && i < HAND_BONE_COUNT; i++) {
+                if (landmarks[i].size() < 3) continue;
+
+                // MediaPipe to SteamVR conversion:
+                // x stays the same, y and z are flipped and scaled
+                _boneTransforms[i].position.v[0] = landmarks[i][0] * scale;
+                _boneTransforms[i].position.v[1] = -landmarks[i][1] * scale;  // Flip Y
+                _boneTransforms[i].position.v[2] = -landmarks[i][2] * scale;  // Flip Z
+
+                // Set default orientation
+                _boneTransforms[i].orientation.w = 1.0f;
+                _boneTransforms[i].orientation.x = 0.0f;
+                _boneTransforms[i].orientation.y = 0.0f;
+                _boneTransforms[i].orientation.z = 0.0f;
+            }
 
         // Process each bone
         for (int i = 1; i < 21 && i < HAND_BONE_COUNT; i++) {
@@ -441,6 +463,8 @@ private:
                     }
                 }
             }
+            // Calculate bone orientations based on positions
+            CalculateBoneOrientations();
             // Log bone positions after transformation
             DebugLog("%s hand: Wrist at (%.3f, %.3f, %.3f)\n",
                 _role == 0 ? "Left" : "Right",
@@ -464,32 +488,16 @@ private:
         if (boneIndex == 0) return -1;  // Wrist is the root
 
         // For the standard 31-bone hand model in SteamVR:
-        if (boneIndex == 1) return 0;   // Thumb metacarpal -> wrist
-        if (boneIndex == 2) return 1;   // Thumb proximal -> thumb metacarpal
-        if (boneIndex == 3) return 2;   // Thumb distal -> thumb proximal
-        if (boneIndex == 4) return 3;   // Thumb tip -> thumb distal
+         // Thumb
+        if (boneIndex >= 1 && boneIndex <= 4) {
+            if (boneIndex == 1) return 0;  // Thumb base connects to wrist
+            return boneIndex - 1;          // Other thumb bones connect in sequence
+        }
 
-        if (boneIndex == 5) return 0;   // Index metacarpal -> wrist
-        if (boneIndex == 6) return 5;   // Index proximal -> index metacarpal
-        if (boneIndex == 7) return 6;   // Index middle -> index proximal
-        if (boneIndex == 8) return 7;   // Index distal -> index middle
-
-        if (boneIndex == 9) return 0;   // Middle metacarpal -> wrist
-        if (boneIndex == 10) return 9;  // Middle proximal -> middle metacarpal
-        if (boneIndex == 11) return 10; // Middle middle -> middle proximal
-        if (boneIndex == 12) return 11; // Middle distal -> middle middle
-
-        if (boneIndex == 13) return 0;  // Ring metacarpal -> wrist
-        if (boneIndex == 14) return 13; // Ring proximal -> ring metacarpal
-        if (boneIndex == 15) return 14; // Ring middle -> ring proximal
-        if (boneIndex == 16) return 15; // Ring distal -> ring middle
-
-        if (boneIndex == 17) return 0;  // Pinky metacarpal -> wrist
-        if (boneIndex == 18) return 17; // Pinky proximal -> pinky metacarpal
-        if (boneIndex == 19) return 18; // Pinky middle -> pinky proximal
-        if (boneIndex == 20) return 19; // Pinky distal -> pinky middle
-
-        return -1;  // Unknown bone
+        // Other fingers (index, middle, ring, pinky)
+    // Each connects to wrist and then in sequence
+        if (boneIndex % 4 == 1) return 0;  // Base of each finger connects to wrist
+        return boneIndex - 1;              // Other finger bones connect in sequence
     }
 };
 
