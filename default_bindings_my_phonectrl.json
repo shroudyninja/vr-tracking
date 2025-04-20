@@ -1,0 +1,6 @@
+{
+  "driver_my_phonectrl": {
+    "enable": true,
+    "hand_tracking_enabled": true
+  }
+}
