@@ -205,7 +205,7 @@ while True:
 
             msg = json.dumps(data).encode('utf-8')
             sock.sendto(msg, (UDP_IP, UDP_PORT))
-
+            print(f"Sending UDP data: {len(msg)} bytes to {UDP_IP}:{UDP_PORT}")
             # PRINT STATUS
             t = time.time()
             print(f"{t:.2f} — Cam0 hands? {bool(res0.multi_hand_landmarks)} "
