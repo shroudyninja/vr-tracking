@@ -115,10 +115,172 @@ public:
 
         return VRInitError_None;
     }
+    // Add this as a private method in the PhoneController class
+    void CalculateBoneOrientations() {
+        // Calculate orientations for each bone based on positions
+        float wristToMiddle[3] = {
+        _boneTransforms[9].position.v[0] - _boneTransforms[0].position.v[0],
+        _boneTransforms[9].position.v[1] - _boneTransforms[0].position.v[1],
+        _boneTransforms[9].position.v[2] - _boneTransforms[0].position.v[2]
+        };
 
+        float wristToIndex[3] = {
+            _boneTransforms[5].position.v[0] - _boneTransforms[0].position.v[0],
+            _boneTransforms[5].position.v[1] - _boneTransforms[0].position.v[1],
+            _boneTransforms[5].position.v[2] - _boneTransforms[0].position.v[2]
+        };
+
+        // Now calculate orientation for each bone
+        for (int i = 1; i < HAND_BONE_COUNT; i++) {
+            int parent = GetParentBoneIndex(i);
+            if (parent < 0) continue;
+
+            // Get direction from parent to current bone
+            float dir[3] = {
+                _boneTransforms[i].position.v[0] - _boneTransforms[parent].position.v[0],
+                _boneTransforms[i].position.v[1] - _boneTransforms[parent].position.v[1],
+                _boneTransforms[i].position.v[2] - _boneTransforms[parent].position.v[2]
+            };
+
+            // Skip if direction is too small
+            float length = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+            if (length < 0.0001f) {
+                // Default identity quaternion
+                _boneTransforms[i].orientation.w = 1.0f;
+                _boneTransforms[i].orientation.x = 0.0f;
+                _boneTransforms[i].orientation.y = 0.0f;
+                _boneTransforms[i].orientation.z = 0.0f;
+                continue;
+            }
+
+            // Normalize direction
+            dir[0] /= length;
+            dir[1] /= length;
+            dir[2] /= length;
+
+            // Create a local coordinate system for the bone
+            // Forward is the direction from parent to current
+            float forward[3] = { dir[0], dir[1], dir[2] };
+
+            // Find appropriate up vector based on bone type
+            float up[3] = { 0.0f, 1.0f, 0.0f };  // default
+
+            // For finger bones, we can use the wrist-to-middle direction as a reference
+            if (i >= 5) {  // Finger bones
+                up[0] = wristToMiddle[0];
+                up[1] = wristToMiddle[1];
+                up[2] = wristToMiddle[2];
+            }
+
+            // Make sure up is perpendicular to forward
+            // First, calculate the dot product
+            float dot = up[0] * forward[0] + up[1] * forward[1] + up[2] * forward[2];
+
+            // Subtract the projection to make perpendicular
+            up[0] -= dot * forward[0];
+            up[1] -= dot * forward[1];
+            up[2] -= dot * forward[2];
+
+            // Normalize up
+            length = sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+            if (length < 0.0001f) {
+                // If up vector is too small, find another vector perpendicular to forward
+                if (fabs(forward[0]) < 0.9f) {
+                    up[0] = 1.0f;
+                    up[1] = 0.0f;
+                    up[2] = 0.0f;
+                }
+                else {
+                    up[0] = 0.0f;
+                    up[1] = 1.0f;
+                    up[2] = 0.0f;
+                }
+
+                // Make perpendicular to forward
+                dot = up[0] * forward[0] + up[1] * forward[1] + up[2] * forward[2];
+                up[0] -= dot * forward[0];
+                up[1] -= dot * forward[1];
+                up[2] -= dot * forward[2];
+
+                // Normalize again
+                length = sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+            }
+
+            up[0] /= length;
+            up[1] /= length;
+            up[2] /= length;
+
+            // Calculate right as cross product of forward and up
+            float right[3] = {
+                forward[1] * up[2] - forward[2] * up[1],
+                forward[2] * up[0] - forward[0] * up[2],
+                forward[0] * up[1] - forward[1] * up[0]
+            };
+
+            // Now we have a local basis (right, up, forward)
+            // Convert to quaternion - this is a standard way to convert a rotation matrix to quaternion
+
+            // This is essentially constructing a 3x3 rotation matrix from the basis vectors
+            // and then converting that matrix to a quaternion
+
+            float trace = right[0] + up[1] + forward[2];
+            float qw, qx, qy, qz;
+
+            if (trace > 0.0f) {
+                float s = 0.5f / sqrt(trace + 1.0f);
+                qw = 0.25f / s;
+                qx = (up[2] - forward[1]) * s;
+                qy = (forward[0] - right[2]) * s;
+                qz = (right[1] - up[0]) * s;
+            }
+            else if (right[0] > up[1] && right[0] > forward[2]) {
+                float s = 2.0f * sqrt(1.0f + right[0] - up[1] - forward[2]);
+                qw = (up[2] - forward[1]) / s;
+                qx = 0.25f * s;
+                qy = (right[1] + up[0]) / s;
+                qz = (right[2] + forward[0]) / s;
+            }
+            else if (up[1] > forward[2]) {
+                float s = 2.0f * sqrt(1.0f + up[1] - right[0] - forward[2]);
+                qw = (forward[0] - right[2]) / s;
+                qx = (right[1] + up[0]) / s;
+                qy = 0.25f * s;
+                qz = (up[2] + forward[1]) / s;
+            }
+            else {
+                float s = 2.0f * sqrt(1.0f + forward[2] - right[0] - up[1]);
+                qw = (right[1] - up[0]) / s;
+                qx = (right[2] + forward[0]) / s;
+                qy = (up[2] + forward[1]) / s;
+                qz = 0.25f * s;
+            }
+
+            // Store the calculated quaternion
+            _boneTransforms[i].orientation.w = qw;
+            _boneTransforms[i].orientation.x = qx;
+            _boneTransforms[i].orientation.y = qy;
+            _boneTransforms[i].orientation.z = qz;
+
+            // Normalize the quaternion to be safe
+            float qLength = sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+            if (qLength > 0.0001f) {
+                _boneTransforms[i].orientation.w /= qLength;
+                _boneTransforms[i].orientation.x /= qLength;
+                _boneTransforms[i].orientation.y /= qLength;
+                _boneTransforms[i].orientation.z /= qLength;
+            }
+        }
+    }
     void Deactivate() override {
+        DebugLog("%s hand: Index MCP orientation: w=%.3f, x=%.3f, y=%.3f, z=%.3f\n",
+            _role == 0 ? "Left" : "Right",
+            _boneTransforms[5].orientation.w,
+            _boneTransforms[5].orientation.x,
+            _boneTransforms[5].orientation.y,
+            _boneTransforms[5].orientation.z);
         DebugLog("PhoneController %s deactivated\n", _role == 0 ? "Left" : "Right");
         _objectId = k_unTrackedDeviceIndexInvalid;
+
     }
 
     void EnterStandby() override {}
@@ -481,23 +643,40 @@ private:
     }
 
     int GetParentBoneIndex(int boneIndex) {
-        // SteamVR hand bones are arranged in a specific hierarchy
-        // Modify this according to the actual SteamVR bone structure
-        // Return the index of the parent bone for the given bone index
+        // This is a simplified mapping for a 31-bone hand skeleton
+         // In a real implementation, you would map this accurately to SteamVR's bone hierarchy
+         // The typical SteamVR hand has 31 bones:
+         // - 1 root/wrist
+         // - 5 metacarpals (1 per finger)
+         // - 5 knuckles (1 per finger)
+         // - 4 finger proximal joints (excluding thumb)
+         // - 4 finger middle joints (excluding thumb)
+         // - 5 finger tip joints (1 per digit)
+         // - 6 auxiliary/helper bones
 
-        if (boneIndex == 0) return -1;  // Wrist is the root
+         // For this example, we'll map directly from MediaPipe's 21 landmarks:
+         // 0: Wrist
+         // 1-4: Thumb (CMC, MCP, IP, TIP)
+         // 5-8: Index (MCP, PIP, DIP, TIP)
+         // 9-12: Middle (MCP, PIP, DIP, TIP)
+         // 13-16: Ring (MCP, PIP, DIP, TIP)
+         // 17-20: Pinky (MCP, PIP, DIP, TIP)
 
-        // For the standard 31-bone hand model in SteamVR:
-         // Thumb
+        if (boneIndex == 0) return -1;  // Wrist is root
+
+        // Thumb chain
         if (boneIndex >= 1 && boneIndex <= 4) {
-            if (boneIndex == 1) return 0;  // Thumb base connects to wrist
-            return boneIndex - 1;          // Other thumb bones connect in sequence
+            return boneIndex - 1;  // Each thumb bone connects to previous
         }
 
-        // Other fingers (index, middle, ring, pinky)
-    // Each connects to wrist and then in sequence
-        if (boneIndex % 4 == 1) return 0;  // Base of each finger connects to wrist
-        return boneIndex - 1;              // Other finger bones connect in sequence
+        // For fingers (index, middle, ring, pinky)
+        // The MCP (knuckle) connects to wrist
+        if (boneIndex == 5 || boneIndex == 9 || boneIndex == 13 || boneIndex == 17) {
+            return 0;  // Connect to wrist
+        }
+
+        // Otherwise, connect to previous bone in the chain
+        return boneIndex - 1;
     }
 };
 
