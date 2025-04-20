@@ -91,6 +91,7 @@ public:
             true
         );
         VRInputComponentHandle_t handle;
+
         VRDriverInput()->CreateSkeletonComponent(
             container,  // Use the property container from your device
             (_role == 0) ? "/input/skeleton/left" : "/input/skeleton/right",
@@ -523,6 +524,14 @@ private:
                 nullptr,
                 0,
                 &_skeletalComponentHandle
+            );
+            // Add these lines to register the raw pose input source
+            VRDriverInput()->CreateScalarComponent(
+                container,
+                "/pose/raw",
+                &_poseComponentHandle,
+                VRScalarType_Absolute,
+                VRScalarUnits_None
             );
 
             DebugLog("%s hand: Created skeletal component, error=%d, handle=%llu\n",
